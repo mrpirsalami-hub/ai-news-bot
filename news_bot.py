@@ -13,8 +13,10 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -86,11 +88,22 @@ def parse_feed(xml_bytes):
     return articles
 
 
-def fetch(url, data=None, headers=None, timeout=30):
-    req = urllib.request.Request(url, data=data, headers=headers or {})
-    req.add_header("User-Agent", USER_AGENT)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read()
+def fetch(url, data=None, headers=None, timeout=30, retries=2):
+    """HTTP request with a few retries on 429/5xx and readable error output."""
+    for attempt in range(retries + 1):
+        req = urllib.request.Request(url, data=data, headers=headers or {})
+        req.add_header("User-Agent", USER_AGENT)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")[:600]
+            if exc.code in (429, 500, 502, 503, 504) and attempt < retries:
+                time.sleep(4 * (attempt + 1))
+                continue
+            host = urlparse(url).netloc
+            print(f"ERROR: HTTP {exc.code} from {host}\n{body}", file=sys.stderr)
+            raise
 
 
 def load_posted():
