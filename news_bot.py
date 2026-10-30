@@ -25,12 +25,15 @@ from pathlib import Path
 FEEDS = [
     "https://techcrunch.com/category/artificial-intelligence/feed/",
     "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml",
-    "https://venturebeat.com/category/ai/feed/",
+    "https://www.artificialintelligence-news.com/feed/",
 ]
 WINDOW_HOURS = 30        # only articles newer than this
 MAX_CANDIDATES = 12      # sent to the model
 POSTED_FILE = Path(__file__).parent / "posted.json"
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# Tried in order; the next one is used if a model returns 404 (retired/renamed).
+GEMINI_MODELS = [
+    m for m in (os.environ.get("GEMINI_MODEL"), "gemini-3.8-flash", "gemini-flash-latest") if m
+]
 USER_AGENT = "Mozilla/5.0 (compatible; ai-news-bot/1.0)"
 
 
@@ -154,17 +157,28 @@ def build_prompt(candidates):
 
 
 def ask_gemini(api_key, prompt):
-    url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent"
-    )
     body = json.dumps({"contents": [{"parts": [{"text": prompt}]}]}).encode()
-    raw = fetch(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
-        timeout=90,
-    )
+    raw = None
+    for model in GEMINI_MODELS:
+        url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent"
+        )
+        try:
+            raw = fetch(
+                url,
+                data=body,
+                headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+                timeout=90,
+            )
+            print(f"Gemini model used: {model}")
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            print(f"Model {model} not available, trying the next one.", file=sys.stderr)
+    if raw is None:
+        raise RuntimeError("No Gemini model worked; set GEMINI_MODEL to a current model name.")
     data = json.loads(raw)
     try:
         text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
